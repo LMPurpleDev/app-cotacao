@@ -1,109 +1,128 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from streamlit_option_menu import option_menu
 import plotly.express as px
 
-# CONFIGURAÇÕES INICIAIS
-st.set_page_config(page_title="Cotação de Insumos", layout="wide")
+# Autenticação do Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets",
+         "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("cotacaostreamlit-6c6474fd809e.json", scope)
+client = gspread.authorize(creds)
 
-# LOGO E TÍTULO
-st.image("https://i.imgur.com/FVfXZZG.png", width=100)  # Troque pela sua logo, se quiser
-st.markdown("<h1 style='color:#2E86C1;'>📦 Sistema de Cotação de Insumos</h1>", unsafe_allow_html=True)
+# Planilhas
+sheet = client.open("App Compras")
+sheet_insumos = sheet.worksheet("Insumos")
+sheet_fornecedores = sheet.worksheet("Fornecedores")
+sheet_cotacoes = sheet.worksheet("Cotações")
 
-# UPLOAD
-st.sidebar.header("📁 Upload de Arquivos Excel")
-insumos_file = st.sidebar.file_uploader("Insumos", type="xlsx")
-fornecedores_file = st.sidebar.file_uploader("Fornecedores", type="xlsx")
-cotacoes_file = st.sidebar.file_uploader("Cotações", type="xlsx")
+# Funções auxiliares
+def autenticar_usuario():
+    st.title("Login")
+    username = st.text_input("Usuário")
+    password = st.text_input("Senha", type="password")
+    if st.button("Entrar"):
+        if username == "admin" and password == "admin":
+            st.session_state.autenticado = True
+        else:
+            st.error("Usuário ou senha incorretos.")
 
-if insumos_file and fornecedores_file and cotacoes_file:
-    insumos_df = pd.read_excel(insumos_file)
-    fornecedores_df = pd.read_excel(fornecedores_file)
-    cotacoes_df = pd.read_excel(cotacoes_file)
+def buscar_insumos():
+    st.header("🔍 Buscar Insumos")
+    df = pd.DataFrame(sheet_insumos.get_all_records())
+    termo = st.text_input("Buscar por nome ou código")
+    if termo:
+        df = df[df.apply(lambda row: termo.lower() in str(row).lower(), axis=1)]
+    st.dataframe(df)
 
-    # Padroniza nomes das colunas
-    insumos_df.columns = insumos_df.columns.str.strip()
-    fornecedores_df.columns = fornecedores_df.columns.str.strip()
-    cotacoes_df.columns = cotacoes_df.columns.str.strip()
+def cadastro():
+    st.header("📝 Cadastro")
+    aba = st.radio("Escolha o que deseja cadastrar:", ["Insumo", "Fornecedor", "Cotação"])
 
-    # Combinação de dados
-    df = cotacoes_df.merge(insumos_df, on="ID Insumo")
-    df = df.merge(fornecedores_df, on="ID Fornecedor")
-    df = df.rename(columns={"Nome_x": "Nome Insumo", "Nome_y": "Nome Fornecedor"})
+    if aba == "Insumo":
+        nome = st.text_input("Nome do insumo")
+        codigo = st.text_input("Código")
+        unidade = st.text_input("Unidade")
+        if st.button("Cadastrar Insumo"):
+            if nome and codigo and unidade:
+                sheet_insumos.append_row([nome, codigo, unidade])
+                st.success("Insumo cadastrado com sucesso!")
 
-    # 🔍 AUTOCOMPLETE DE INSUMOS
-    st.subheader("🔎 Buscar Insumo por Nome")
-    busca_nome = st.text_input("Digite o nome do insumo (ou parte dele):")
-    if busca_nome:
-        resultados = df[df["Nome Insumo"].str.contains(busca_nome, case=False)]
-        st.dataframe(resultados)
+    elif aba == "Fornecedor":
+        nome = st.text_input("Nome do fornecedor")
+        cnpj = st.text_input("CNPJ")
+        email = st.text_input("E-mail")
+        if st.button("Cadastrar Fornecedor"):
+            if nome and cnpj and email:
+                sheet_fornecedores.append_row([nome, cnpj, email])
+                st.success("Fornecedor cadastrado com sucesso!")
 
-    # 🎛️ FILTROS
-    st.subheader("🎛️ Filtros")
-    insumo_opcoes = df["Nome Insumo"].unique()
-    insumo_selecionado = st.multiselect("Filtrar por insumo:", options=insumo_opcoes, default=insumo_opcoes)
-    fornecedor_opcoes = df["Nome Fornecedor"].unique()
-    fornecedor_selecionado = st.multiselect("Filtrar por fornecedor:", options=fornecedor_opcoes, default=fornecedor_opcoes)
+    elif aba == "Cotação":
+        insumo = st.text_input("Nome do insumo")
+        fornecedor = st.text_input("Nome do fornecedor")
+        valor = st.number_input("Valor da cotação", min_value=0.0, format="%.2f")
+        data = st.date_input("Data da cotação")
+        if st.button("Cadastrar Cotação"):
+            if insumo and fornecedor and valor and data:
+                sheet_cotacoes.append_row([insumo, fornecedor, valor, str(data)])
+                st.success("Cotação cadastrada com sucesso!")
 
-    df_filtrado = df[df["Nome Insumo"].isin(insumo_selecionado) & df["Nome Fornecedor"].isin(fornecedor_selecionado)]
+def consultar():
+    st.header("📋 Consultar Registros")
+    aba = st.radio("Escolha o que deseja visualizar:", ["Insumos", "Fornecedores", "Cotações"])
 
-    st.subheader("📊 Cotações Filtradas")
-    st.dataframe(df_filtrado)
+    if aba == "Insumos":
+        st.dataframe(pd.DataFrame(sheet_insumos.get_all_records()))
+    elif aba == "Fornecedores":
+        st.dataframe(pd.DataFrame(sheet_fornecedores.get_all_records()))
+    elif aba == "Cotações":
+        st.dataframe(pd.DataFrame(sheet_cotacoes.get_all_records()))
 
-    # ✅ MELHORES COTAÇÕES
-    melhores = df_filtrado.sort_values("Preço Unitário").groupby("ID Insumo").first().reset_index()
-    st.subheader("✅ Melhores Cotações por Insumo")
-    st.dataframe(melhores)
+def dashboards():
+    st.header("📊 Dashboards")
+    df = pd.DataFrame(sheet_cotacoes.get_all_records())
 
-    # 📈 GRÁFICOS
-    st.subheader("📈 Gráficos Comparativos")
+    if df.empty:
+        st.info("Nenhuma cotação encontrada.")
+        return
 
-    fig_melhores = px.bar(
-        melhores, x="Nome Insumo", y="Preço Unitário", color="Nome Fornecedor",
-        title="🟩 Melhor Preço por Insumo"
-    )
-    st.plotly_chart(fig_melhores, use_container_width=True)
+    df['valor'] = pd.to_numeric(df['valor'], errors='coerce')
+    df['data'] = pd.to_datetime(df['data'], errors='coerce')
+    st.subheader("Média de Preço por Fornecedor")
+    grafico = df.groupby("fornecedor")["valor"].mean().reset_index()
+    fig = px.bar(grafico, x="fornecedor", y="valor", title="Média de valores por fornecedor")
+    st.plotly_chart(fig)
 
-    fig_dispersao = px.scatter(
-        df_filtrado, x="Nome Insumo", y="Preço Unitário", color="Nome Fornecedor",
-        size="Preço Unitário", title="🟨 Dispersão de Preços por Insumo"
-    )
-    st.plotly_chart(fig_dispersao, use_container_width=True)
+    st.subheader("Evolução de Preços por Insumo")
+    insumo_selecionado = st.selectbox("Escolha um insumo", df["insumo"].unique())
+    df_filtrado = df[df["insumo"] == insumo_selecionado]
+    fig2 = px.line(df_filtrado, x="data", y="valor", color="fornecedor",
+                   title=f"Histórico de preços - {insumo_selecionado}")
+    st.plotly_chart(fig2)
 
-    media_fornecedores = df_filtrado.groupby("Nome Fornecedor")["Preço Unitário"].mean().reset_index()
-    fig_media = px.bar(
-        media_fornecedores, x="Nome Fornecedor", y="Preço Unitário",
-        title="🟥 Preço Médio por Fornecedor"
-    )
-    st.plotly_chart(fig_media, use_container_width=True)
+# App principal
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
 
-    # 💰 SIMULADOR DE PEDIDO
-    st.subheader("📦 Simulador de Pedido")
-
-    nome_insumo = st.selectbox("Selecione o insumo:", insumo_opcoes)
-    fornecedores_disponiveis = df_filtrado[df_filtrado["Nome Insumo"] == nome_insumo]["Nome Fornecedor"].unique()
-
-    if len(fornecedores_disponiveis) > 0:
-        nome_fornecedor = st.selectbox("Selecione o fornecedor:", fornecedores_disponiveis)
-        quantidade = st.number_input("Quantidade desejada:", min_value=1, value=10)
-
-        cotacao_escolhida = df_filtrado[
-            (df_filtrado["Nome Insumo"] == nome_insumo) &
-            (df_filtrado["Nome Fornecedor"] == nome_fornecedor)
-        ].iloc[0]
-
-        preco_unitario = cotacao_escolhida["Preço Unitário"]
-        total = preco_unitario * quantidade
-
-        st.success(f"💵 Total estimado: R${total:,.2f} (R${preco_unitario:.2f} x {quantidade})")
-    else:
-        st.warning("⚠️ Nenhum fornecedor disponível para o insumo selecionado.")
-
-    # 📤 EXPORTAR
-    if st.button("📤 Exportar Cotações Filtradas"):
-        with pd.ExcelWriter("resultado_filtrado.xlsx", engine="openpyxl") as writer:
-            df_filtrado.to_excel(writer, sheet_name="Cotações Filtradas", index=False)
-            melhores.to_excel(writer, sheet_name="Melhores", index=False)
-            media_fornecedores.to_excel(writer, sheet_name="Média", index=False)
-        st.success("✅ Arquivo salvo como 'resultado_filtrado.xlsx'.")
+if not st.session_state.autenticado:
+    autenticar_usuario()
 else:
-    st.warning("📥 Faça o upload de todos os arquivos Excel para começar.")
+    st.set_page_config(page_title="CotacaoStreamlit", layout="wide")
+    with st.sidebar:
+        escolha = option_menu(
+            menu_title="Menu",
+            options=["Buscar", "Cadastro", "Consultar", "Dashboards"],
+            icons=["search", "clipboard-plus", "table", "bar-chart"],
+            menu_icon="cast",
+            default_index=0,
+        )
+
+    if escolha == "Buscar":
+        buscar_insumos()
+    elif escolha == "Cadastro":
+        cadastro()
+    elif escolha == "Consultar":
+        consultar()
+    elif escolha == "Dashboards":
+        dashboards()
